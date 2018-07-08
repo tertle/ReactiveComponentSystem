@@ -8,9 +8,8 @@ namespace BovineLabs.Toolkit.ECS
 {
     public abstract class ReactiveComponentSystem : ComponentSystem
     {
-        private readonly Dictionary<Type, IReactiveGroup> _reactiveGroups = new Dictionary<Type, IReactiveGroup>();
-
         private static ModuleBuilder _moduleBuilder;
+        private readonly Dictionary<Type, IReactiveGroup> _reactiveGroups = new Dictionary<Type, IReactiveGroup>();
 
         private static ModuleBuilder ModuleBuilder
         {
@@ -87,18 +86,15 @@ namespace BovineLabs.Toolkit.ECS
 
         private interface IReactiveGroup
         {
-            void AddComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
-            void RemoveComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
             ComponentGroup AddGroup { get; }
             ComponentGroup RemoveGroup { get; }
+            void AddComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
+            void RemoveComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
         }
 
         private class ReactiveGroup<T> : IReactiveGroup where T : struct, ISystemStateComponentData
         {
             private readonly T _stateComponent;
-
-            public ComponentGroup AddGroup { get; }
-            public ComponentGroup RemoveGroup { get; }
 
             public ReactiveGroup(T stateComponent, ComponentGroup addGroup, ComponentGroup removeGroup)
             {
@@ -106,6 +102,9 @@ namespace BovineLabs.Toolkit.ECS
                 AddGroup = addGroup;
                 RemoveGroup = removeGroup;
             }
+
+            public ComponentGroup AddGroup { get; }
+            public ComponentGroup RemoveGroup { get; }
 
             public void AddComponent(EntityCommandBuffer entityCommandBuffer, Entity entity)
             {
