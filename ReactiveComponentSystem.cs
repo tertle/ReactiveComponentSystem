@@ -18,8 +18,8 @@ namespace BovineLabs.Toolkit.ECS
                 if (_moduleBuilder == null)
                 {
                     var assemblyName = new AssemblyName("BovineLabsReactive");
-                    var assemblyBuilder =
-                        AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.RunAndSave);
+                    var assemblyBuilder = AppDomain.CurrentDomain
+                        .DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.RunAndSave);
                     _moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name, assemblyName.Name + ".dll");
                 }
 
@@ -48,8 +48,8 @@ namespace BovineLabs.Toolkit.ECS
             var reactiveComponentStateType = CreateReactiveTypeState(reactiveComponent);
 
             var addGroup = GetComponentGroup(reactiveComponent, ComponentType.Subtractive(reactiveComponentStateType));
-            var removeGroup =
-                GetComponentGroup(ComponentType.Subtractive(reactiveComponent), reactiveComponentStateType);
+            var removeGroup = GetComponentGroup(ComponentType.Subtractive(reactiveComponent),
+                ComponentType.ReadOnly(reactiveComponentStateType));
 
             var reactiveComponentState = Activator.CreateInstance(reactiveComponentStateType);
             var makeme = typeof(ReactiveGroup<>).MakeGenericType(reactiveComponentStateType);
