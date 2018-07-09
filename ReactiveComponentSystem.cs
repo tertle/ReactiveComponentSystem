@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using Unity.Entities;
@@ -8,8 +9,9 @@ namespace BovineLabs.Toolkit.ECS
 {
     public abstract class ReactiveComponentSystem : ComponentSystem
     {
+        private static List<ComponentType> _componentTypes = new List<ComponentType>();
         private static ModuleBuilder _moduleBuilder;
-        private readonly Dictionary<Type, IReactiveGroup> _reactiveGroups = new Dictionary<Type, IReactiveGroup>();
+        private readonly Dictionary<ComponentType[], IReactiveGroup> _reactiveGroups = new Dictionary<ComponentType[], IReactiveGroup>(new ArrayCompare());
 
         private static ModuleBuilder ModuleBuilder
         {
@@ -27,38 +29,70 @@ namespace BovineLabs.Toolkit.ECS
             }
         }
 
-        protected ComponentGroup GetReactiveAddGroup(Type type)
+        protected ComponentGroup GetReactiveAddGroup(params ComponentType[] componentTypes)
         {
-            if (!_reactiveGroups.TryGetValue(type, out var reactiveGroup))
-                reactiveGroup = _reactiveGroups[type] = CreateReactiveGroup(type);
+            if (componentTypes == null)
+                throw new ArgumentNullException(nameof(componentTypes));
+
+            if (componentTypes.Length == 0)
+                throw new ArgumentException("Need to have at least 1 component", nameof(componentTypes));
+
+            if (!_reactiveGroups.TryGetValue(componentTypes, out var reactiveGroup))
+                reactiveGroup = _reactiveGroups[componentTypes] = CreateReactiveGroup(componentTypes);
 
             return reactiveGroup.AddGroup;
         }
-
-        protected ComponentGroup GetReactiveRemoveGroup(Type type)
+        
+        protected ComponentGroup GetReactiveRemoveGroup(params ComponentType[] componentType)
         {
-            if (!_reactiveGroups.TryGetValue(type, out var reactiveGroup))
-                reactiveGroup = _reactiveGroups[type] = CreateReactiveGroup(type);
+            if (componentType == null)
+                throw new ArgumentNullException(nameof(componentType));
+
+            if (componentType.Length == 0)
+                throw new ArgumentException("Need to have at least 1 component", nameof(componentType));
+
+            if (!_reactiveGroups.TryGetValue(componentType, out var reactiveGroup))
+                reactiveGroup = _reactiveGroups[componentType] = CreateReactiveGroup(componentType);
 
             return reactiveGroup.RemoveGroup;
         }
 
-        private IReactiveGroup CreateReactiveGroup(Type reactiveComponent)
+        private IReactiveGroup CreateReactiveGroup(ComponentType[] componentTypes)
         {
-            var reactiveComponentStateType = CreateReactiveTypeState(reactiveComponent);
+            var reactiveComponentStateType = CreateReactiveTypeState(componentTypes);
 
-            var addGroup = GetComponentGroup(reactiveComponent, ComponentType.Subtractive(reactiveComponentStateType));
-            var removeGroup = GetComponentGroup(ComponentType.Subtractive(reactiveComponent),
-                ComponentType.ReadOnly(reactiveComponentStateType));
+            _componentTypes.AddRange(componentTypes);
+            _componentTypes.Add(ComponentType.Subtractive(reactiveComponentStateType));
+            
+            var addGroup = GetComponentGroup(_componentTypes.ToArray());           
+
+            _componentTypes.Clear();
+
+            // Invert our component access for the remove group
+            for (var index = 0; index < componentTypes.Length; index++)
+            {
+                var c = componentTypes[index];
+                c.AccessModeType = c.AccessModeType == ComponentType.AccessMode.Subtractive
+                    ? ComponentType.AccessMode.ReadWrite
+                    : ComponentType.AccessMode.Subtractive;
+                _componentTypes.Add(c);
+            }
+
+            _componentTypes.Add(ComponentType.ReadOnly(reactiveComponentStateType));
+            
+            var removeGroup = GetComponentGroup(_componentTypes.ToArray());
+            
+            _componentTypes.Clear();
 
             var reactiveComponentState = Activator.CreateInstance(reactiveComponentStateType);
             var makeme = typeof(ReactiveGroup<>).MakeGenericType(reactiveComponentStateType);
             return (IReactiveGroup) Activator.CreateInstance(makeme, reactiveComponentState, addGroup, removeGroup);
         }
 
-        private Type CreateReactiveTypeState(Type reactiveComponent)
+        private Type CreateReactiveTypeState(IEnumerable<ComponentType> componentTypes)
         {
-            var typeName = $"{GetType().Name}_{reactiveComponent.Name}";
+            var name = string.Join("_", componentTypes);
+            var typeName = $"{GetType().Name}_{name}";
             var typeBuilder = ModuleBuilder.DefineType(typeName, TypeAttributes.Public, typeof(ValueType));
             typeBuilder.AddInterfaceImplementation(typeof(ISystemStateComponentData));
             return typeBuilder.CreateType();
@@ -114,6 +148,24 @@ namespace BovineLabs.Toolkit.ECS
             public void RemoveComponent(EntityCommandBuffer entityCommandBuffer, Entity entity)
             {
                 entityCommandBuffer.RemoveComponent<T>(entity);
+            }
+        }
+        
+        private class ArrayCompare : IEqualityComparer<ComponentType[]>
+        {
+            public bool Equals(ComponentType[] a, ComponentType[] b)
+            {
+                if (a == null && b == null)
+                    return true;
+                if (a == null || b == null)
+                    return false;
+                
+                return a.SequenceEqual(b);
+            }
+
+            public int GetHashCode(ComponentType[] a)
+            {
+                return a.Aggregate(0, (acc, i) => unchecked(acc * 457 + i.GetHashCode() * 389));
             }
         }
     }
