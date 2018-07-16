@@ -4,14 +4,17 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using Unity.Entities;
+using UnityEngine;
 
 namespace BovineLabs.Toolkit.ECS
 {
     public abstract class ReactiveComponentSystem : ComponentSystem
     {
-        private static List<ComponentType> _componentTypes = new List<ComponentType>();
+        private static readonly List<ComponentType> ComponentTypes = new List<ComponentType>();
         private static ModuleBuilder _moduleBuilder;
-        private readonly Dictionary<ComponentType[], IReactiveGroup> _reactiveGroups = new Dictionary<ComponentType[], IReactiveGroup>(new ArrayCompare());
+
+        private readonly Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveGroup> _reactiveGroups =
+            new Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveGroup>(new KeyCompare());
 
         private static ModuleBuilder ModuleBuilder
         {
@@ -31,58 +34,74 @@ namespace BovineLabs.Toolkit.ECS
 
         protected ComponentGroup GetReactiveAddGroup(params ComponentType[] componentTypes)
         {
+            return GetReactiveAddGroup(componentTypes, new ComponentType[0]);
+        }
+
+        protected ComponentGroup GetReactiveRemoveGroup(params ComponentType[] componentTypes)
+        {
+            return GetReactiveRemoveGroup(componentTypes, new ComponentType[0]);
+        }
+        
+        protected ComponentGroup GetReactiveAddGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
+        {
+            return GetReactiveGroup(componentTypes, conditionTypes).AddGroup;
+        }
+
+        protected ComponentGroup GetReactiveRemoveGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
+        {
+            return GetReactiveGroup(componentTypes,conditionTypes).RemoveGroup;
+        }
+        
+        private IReactiveGroup GetReactiveGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
+        {
             if (componentTypes == null)
                 throw new ArgumentNullException(nameof(componentTypes));
 
+            if (conditionTypes == null)
+                throw new ArgumentNullException(nameof(conditionTypes));
+            
             if (componentTypes.Length == 0)
                 throw new ArgumentException("Need to have at least 1 component", nameof(componentTypes));
 
-            if (!_reactiveGroups.TryGetValue(componentTypes, out var reactiveGroup))
-                reactiveGroup = _reactiveGroups[componentTypes] = CreateReactiveGroup(componentTypes);
+            for (var i = 0; i < componentTypes.Length; i++)
+                if (componentTypes[i].AccessModeType == ComponentType.AccessMode.Subtractive)
+                    throw new ArgumentException("Can not use subtractive components in reactive system");
+            
+            
+            var key = Tuple.Create(componentTypes, conditionTypes);
 
-            return reactiveGroup.AddGroup;
-        }
-        
-        protected ComponentGroup GetReactiveRemoveGroup(params ComponentType[] componentType)
-        {
-            if (componentType == null)
-                throw new ArgumentNullException(nameof(componentType));
+            if (!_reactiveGroups.TryGetValue(key, out var reactiveGroup))
+                reactiveGroup = _reactiveGroups[key] = CreateReactiveGroup(componentTypes, conditionTypes);
 
-            if (componentType.Length == 0)
-                throw new ArgumentException("Need to have at least 1 component", nameof(componentType));
-
-            if (!_reactiveGroups.TryGetValue(componentType, out var reactiveGroup))
-                reactiveGroup = _reactiveGroups[componentType] = CreateReactiveGroup(componentType);
-
-            return reactiveGroup.RemoveGroup;
+            return reactiveGroup;
         }
 
-        private IReactiveGroup CreateReactiveGroup(ComponentType[] componentTypes)
+        private IReactiveGroup CreateReactiveGroup(IReadOnlyList<ComponentType> componentTypes, ComponentType[] conditionTypes)
         {
             var reactiveComponentStateType = CreateReactiveTypeState(componentTypes);
 
-            _componentTypes.AddRange(componentTypes);
-            _componentTypes.Add(ComponentType.Subtractive(reactiveComponentStateType));
+            ComponentTypes.AddRange(componentTypes);
+            ComponentTypes.AddRange(conditionTypes);
+            ComponentTypes.Add(ComponentType.Subtractive(reactiveComponentStateType));
             
-            var addGroup = GetComponentGroup(_componentTypes.ToArray());           
+            var addGroup = GetComponentGroup(ComponentTypes.ToArray());           
 
-            _componentTypes.Clear();
+            ComponentTypes.Clear();
 
             // Invert our component access for the remove group
-            for (var index = 0; index < componentTypes.Length; index++)
+            for (var index = 0; index < componentTypes.Count; index++)
             {
                 var c = componentTypes[index];
-                c.AccessModeType = c.AccessModeType == ComponentType.AccessMode.Subtractive
-                    ? ComponentType.AccessMode.ReadWrite
-                    : ComponentType.AccessMode.Subtractive;
-                _componentTypes.Add(c);
+                // Component mode can only be read or readwrite so inverting always makes it subtractive
+                c.AccessModeType = c.AccessModeType = ComponentType.AccessMode.Subtractive;
+                ComponentTypes.Add(c);
             }
 
-            _componentTypes.Add(ComponentType.ReadOnly(reactiveComponentStateType));
+            ComponentTypes.Add(ComponentType.ReadOnly(reactiveComponentStateType));
             
-            var removeGroup = GetComponentGroup(_componentTypes.ToArray());
+            var removeGroup = GetComponentGroup(ComponentTypes.ToArray());
             
-            _componentTypes.Clear();
+            ComponentTypes.Clear();
 
             var reactiveComponentState = Activator.CreateInstance(reactiveComponentStateType);
             var makeme = typeof(ReactiveGroup<>).MakeGenericType(reactiveComponentStateType);
@@ -150,22 +169,35 @@ namespace BovineLabs.Toolkit.ECS
                 entityCommandBuffer.RemoveComponent<T>(entity);
             }
         }
-        
-        private class ArrayCompare : IEqualityComparer<ComponentType[]>
+
+        private class KeyCompare : IEqualityComparer<Tuple<ComponentType[],ComponentType[]>>
         {
-            public bool Equals(ComponentType[] a, ComponentType[] b)
+            private readonly ComponentComparer _componentComparer = new ComponentComparer();
+            
+            public bool Equals(Tuple<ComponentType[], ComponentType[]> x, Tuple<ComponentType[], ComponentType[]> y)
             {
-                if (a == null && b == null)
-                    return true;
-                if (a == null || b == null)
-                    return false;
-                
-                return a.SequenceEqual(b);
+                return x.Item1.SequenceEqual(y.Item1, _componentComparer) && x.Item2.SequenceEqual(y.Item2, _componentComparer);
             }
 
-            public int GetHashCode(ComponentType[] a)
+            public int GetHashCode(Tuple<ComponentType[], ComponentType[]> obj)
             {
-                return a.Aggregate(0, (acc, i) => unchecked(acc * 457 + i.GetHashCode() * 389));
+                var x = obj.Item1.Aggregate(0, (acc, i) => unchecked(acc * 457 + i.GetHashCode() * 389));
+                var y = obj.Item2.Aggregate(0, (acc, i) => unchecked(acc * 457 + i.GetHashCode() * 389));
+                return x * 257 + y;
+            }
+
+            private class ComponentComparer : IEqualityComparer<ComponentType>
+            {
+                public bool Equals(ComponentType lhs, ComponentType rhs)
+                {
+                    return lhs.TypeIndex == rhs.TypeIndex && lhs.FixedArrayLength == rhs.FixedArrayLength &&
+                           lhs.AccessModeType == rhs.AccessModeType;
+                }
+
+                public int GetHashCode(ComponentType obj)
+                {
+                    return (obj.TypeIndex * 5813) ^ obj.FixedArrayLength;
+                }
             }
         }
     }
