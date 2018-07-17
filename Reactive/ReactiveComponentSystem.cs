@@ -3,11 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using Unity.Collections;
 using Unity.Entities;
-using Unity.Jobs;
 
-namespace BovineLabs.Toolkit.ECS
+namespace BovineLabs.Toolkit.Reactive
 {
     public abstract class ReactiveComponentSystem : ComponentSystem
     {
@@ -133,7 +131,7 @@ namespace BovineLabs.Toolkit.ECS
 
         private IReactiveUpdateGroup CreateReactiveUpdateGroup(ComponentType componentType)
         {
-            var group = GetComponentGroup(componentType, typeof(ReactiveChanged));
+            var group = GetComponentGroup(componentType, ComponentType.ReadOnly<ReactiveChanged>());
             
             var reactiveCompareType = typeof(ReactiveCompare<>).MakeGenericType(componentType.GetManagedType());
             
@@ -285,85 +283,5 @@ namespace BovineLabs.Toolkit.ECS
                 }
             }
         }
-    }
-
-    public struct ReactiveChanged : IComponentData
-    {
-        
-    }
-
-    public class ReactiveUpdateBarrier : BarrierSystem
-    {
-        
-    }
-    
-    [UpdateBefore(typeof(ReactiveUpdateBarrier))]
-    public class ReactiveCompareSystem<T, TC> : JobComponentSystem 
-        where T : struct, IComponentData
-        where TC : struct, IReactiveCompare<T>, IComponentData
-    {
-        [Inject] private ReactiveUpdateBarrier _barrier;
-        
-        private ComponentGroup _group;
-
-        protected override void OnCreateManager(int capacity)
-        {
-            _group = GetComponentGroup(typeof(T), typeof(TC), ComponentType.Subtractive<ReactiveChanged>());
-        }
-
-        private struct CompareJob : IJobParallelFor
-        {
-            public EntityCommandBuffer.Concurrent CommandBuffer;
-
-            [ReadOnly] public EntityArray Entities;
-            [ReadOnly] public ComponentDataArray<T> Components;
-            [ReadOnly] public ComponentDataArray<TC> Previous;
-            
-            public void Execute(int index)
-            {
-                if (!Previous[index].Equals(Components[index]))
-                {
-                    var previous = Previous[index];
-                    previous.Set(Components[index]);
-                    CommandBuffer.SetComponent(Entities[index], previous);
-                    CommandBuffer.AddComponent(Entities[index], new ReactiveChanged());
-                }
-            }
-        }
-
-        protected override JobHandle OnUpdate(JobHandle inputDeps)
-        {
-            var compareJob = new CompareJob
-            {
-                Entities = _group.GetEntityArray(),
-                Components = _group.GetComponentDataArray<T>(),
-                Previous = _group.GetComponentDataArray<TC>(),
-                CommandBuffer = _barrier.CreateCommandBuffer()
-            };
-            
-            return compareJob.Schedule(_group.CalculateLength(), 64, inputDeps);
-        }
-    }
-
-    public struct ReactiveCompare<T> : IComponentData, IReactiveCompare<T>
-        where T : struct, IComponentData
-    {
-        public T PreviousState;
-
-        public bool Equals(T t)
-        {
-            return t.Equals(PreviousState);
-        }
-
-        public void Set(T t)
-        {
-            PreviousState = t;
-        }
-    }
-
-    public interface IReactiveCompare<in T>
-    {
-        bool Equals(T t);
-        void Set(T t);
     }
 }
