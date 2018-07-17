@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using Unity.Collections;
 using Unity.Entities;
+using Unity.Jobs;
 
 namespace BovineLabs.Toolkit.ECS
 {
@@ -171,7 +173,11 @@ namespace BovineLabs.Toolkit.ECS
 
                 var removeGroupEntities = group.RemoveGroup.GetEntityArray();
                 for (var index = 0; index < removeGroupEntities.Length; index++)
+                {
                     group.RemoveComponent(PostUpdateCommands, removeGroupEntities[index]);
+                    if (isUpdateGroup)
+                        updateGroup.RemoveComponent(PostUpdateCommands, addGroupEntities[index]); // will these cause issues on deleted entities?
+                }
             }
 
             foreach (var kvp in _reactiveUpdates)
@@ -285,11 +291,19 @@ namespace BovineLabs.Toolkit.ECS
     {
         
     }
+
+    public class ReactiveUpdateBarrier : BarrierSystem
+    {
+        
+    }
     
-    public class ReactiveCompareSystem<T, TC> : ComponentSystem 
+    [UpdateBefore(typeof(ReactiveUpdateBarrier))]
+    public class ReactiveCompareSystem<T, TC> : JobComponentSystem 
         where T : struct, IComponentData
         where TC : struct, IReactiveCompare<T>, IComponentData
     {
+        [Inject] private ReactiveUpdateBarrier _barrier;
+        
         private ComponentGroup _group;
 
         protected override void OnCreateManager(int capacity)
@@ -297,22 +311,37 @@ namespace BovineLabs.Toolkit.ECS
             _group = GetComponentGroup(typeof(T), typeof(TC), ComponentType.Subtractive<ReactiveChanged>());
         }
 
-        protected override void OnUpdate()
+        private struct CompareJob : IJobParallelFor
         {
-            var t = _group.GetComponentDataArray<T>();
-            var tc = _group.GetComponentDataArray<TC>();
-            var entities = _group.GetEntityArray();
+            public EntityCommandBuffer.Concurrent CommandBuffer;
 
-            for (var index = 0; index < t.Length; index++)
+            [ReadOnly] public EntityArray Entities;
+            [ReadOnly] public ComponentDataArray<T> Components;
+            [ReadOnly] public ComponentDataArray<TC> Previous;
+            
+            public void Execute(int index)
             {
-                if (!tc[index].Equals(t[index]))
+                if (!Previous[index].Equals(Components[index]))
                 {
-                    var previous = tc[index];
-                    previous.Set(t[index]);
-                    PostUpdateCommands.SetComponent(entities[index], previous);
-                    PostUpdateCommands.AddComponent(entities[index], new ReactiveChanged());
-                } 
+                    var previous = Previous[index];
+                    previous.Set(Components[index]);
+                    CommandBuffer.SetComponent(Entities[index], previous);
+                    CommandBuffer.AddComponent(Entities[index], new ReactiveChanged());
+                }
             }
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var compareJob = new CompareJob
+            {
+                Entities = _group.GetEntityArray(),
+                Components = _group.GetComponentDataArray<T>(),
+                Previous = _group.GetComponentDataArray<TC>(),
+                CommandBuffer = _barrier.CreateCommandBuffer()
+            };
+            
+            return compareJob.Schedule(_group.CalculateLength(), 64, inputDeps);
         }
     }
 
