@@ -4,7 +4,6 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using Unity.Entities;
-using UnityEngine;
 
 namespace BovineLabs.Toolkit.ECS
 {
@@ -13,8 +12,11 @@ namespace BovineLabs.Toolkit.ECS
         private static readonly List<ComponentType> ComponentTypes = new List<ComponentType>();
         private static ModuleBuilder _moduleBuilder;
 
-        private readonly Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveGroup> _reactiveGroups =
-            new Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveGroup>(new KeyCompare());
+        private readonly Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveAddRemoveGroup> _reactiveGroups =
+            new Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveAddRemoveGroup>(new KeyCompare());
+
+        private readonly Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveUpdateGroup> _reactiveUpdates =
+            new Dictionary<Tuple<ComponentType[], ComponentType[]>, IReactiveUpdateGroup>();
 
         private static ModuleBuilder ModuleBuilder
         {
@@ -41,50 +43,69 @@ namespace BovineLabs.Toolkit.ECS
         {
             return GetReactiveRemoveGroup(componentTypes, new ComponentType[0]);
         }
-        
+
         protected ComponentGroup GetReactiveAddGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
         {
-            return GetReactiveGroup(componentTypes, conditionTypes).AddGroup;
+            return GetReactiveAddRemoveGroup(componentTypes, conditionTypes).AddGroup;
         }
 
         protected ComponentGroup GetReactiveRemoveGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
         {
-            return GetReactiveGroup(componentTypes,conditionTypes).RemoveGroup;
+            return GetReactiveAddRemoveGroup(componentTypes, conditionTypes).RemoveGroup;
         }
-        
-        private IReactiveGroup GetReactiveGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
+
+        protected ComponentGroup GetReactiveUpdateGroup(ComponentType componentType)
+        {
+            if (componentType == null)
+                throw new ArgumentNullException(nameof(componentType));
+
+            var componentTypes = new[] {componentType};
+            var conditionTypes = new ComponentType[0];
+            
+            var key = Tuple.Create(componentTypes, conditionTypes);
+
+            if (!_reactiveUpdates.TryGetValue(key, out var reactiveGroup))
+            {
+                GetReactiveAddRemoveGroup(componentTypes, conditionTypes); // we depend on having an add/remove group
+                reactiveGroup = _reactiveUpdates[key] = CreateReactiveUpdateGroup(componentType);
+            }
+
+            return reactiveGroup.Group;
+        }
+
+        private IReactiveAddRemoveGroup GetReactiveAddRemoveGroup(ComponentType[] componentTypes, ComponentType[] conditionTypes)
         {
             if (componentTypes == null)
                 throw new ArgumentNullException(nameof(componentTypes));
 
             if (conditionTypes == null)
                 throw new ArgumentNullException(nameof(conditionTypes));
-            
+
             if (componentTypes.Length == 0)
                 throw new ArgumentException("Need to have at least 1 component", nameof(componentTypes));
 
             for (var i = 0; i < componentTypes.Length; i++)
                 if (componentTypes[i].AccessModeType == ComponentType.AccessMode.Subtractive)
                     throw new ArgumentException("Can not use subtractive components in reactive system");
-            
-            
+
             var key = Tuple.Create(componentTypes, conditionTypes);
 
             if (!_reactiveGroups.TryGetValue(key, out var reactiveGroup))
-                reactiveGroup = _reactiveGroups[key] = CreateReactiveGroup(componentTypes, conditionTypes);
+                reactiveGroup = _reactiveGroups[key] = CreateReactiveAddRemoveGroup(componentTypes, conditionTypes);
 
             return reactiveGroup;
         }
 
-        private IReactiveGroup CreateReactiveGroup(IReadOnlyList<ComponentType> componentTypes, ComponentType[] conditionTypes)
+        private IReactiveAddRemoveGroup CreateReactiveAddRemoveGroup(IReadOnlyList<ComponentType> componentTypes,
+            ComponentType[] conditionTypes)
         {
             var reactiveComponentStateType = CreateReactiveTypeState(componentTypes);
 
             ComponentTypes.AddRange(componentTypes);
             ComponentTypes.AddRange(conditionTypes);
             ComponentTypes.Add(ComponentType.Subtractive(reactiveComponentStateType));
-            
-            var addGroup = GetComponentGroup(ComponentTypes.ToArray());           
+
+            var addGroup = GetComponentGroup(ComponentTypes.ToArray());
 
             ComponentTypes.Clear();
 
@@ -98,14 +119,27 @@ namespace BovineLabs.Toolkit.ECS
             }
 
             ComponentTypes.Add(ComponentType.ReadOnly(reactiveComponentStateType));
-            
+
             var removeGroup = GetComponentGroup(ComponentTypes.ToArray());
-            
+
             ComponentTypes.Clear();
 
             var reactiveComponentState = Activator.CreateInstance(reactiveComponentStateType);
-            var makeme = typeof(ReactiveGroup<>).MakeGenericType(reactiveComponentStateType);
-            return (IReactiveGroup) Activator.CreateInstance(makeme, reactiveComponentState, addGroup, removeGroup);
+            var makeme = typeof(ReactiveAddRemoveGroup<>).MakeGenericType(reactiveComponentStateType);
+            return (IReactiveAddRemoveGroup) Activator.CreateInstance(makeme, reactiveComponentState, addGroup, removeGroup);
+        }
+
+        private IReactiveUpdateGroup CreateReactiveUpdateGroup(ComponentType componentType)
+        {
+            var group = GetComponentGroup(componentType, typeof(ReactiveChanged));
+            
+            var reactiveCompareType = typeof(ReactiveCompare<>).MakeGenericType(componentType.GetManagedType());
+            
+            var reactiveCompareSystem = typeof(ReactiveCompareSystem<,>).MakeGenericType(componentType.GetManagedType(), reactiveCompareType);
+            World.CreateManager(reactiveCompareSystem);
+            
+            var makeme = typeof(ReactiveAddRemoveGroup<,>).MakeGenericType(componentType.GetManagedType(), reactiveCompareType);
+            return (IReactiveUpdateGroup) Activator.CreateInstance(makeme, group);
         }
 
         private Type CreateReactiveTypeState(IEnumerable<ComponentType> componentTypes)
@@ -125,19 +159,34 @@ namespace BovineLabs.Toolkit.ECS
             {
                 var group = kvp.Value;
 
+                var isUpdateGroup = _reactiveUpdates.TryGetValue(kvp.Key, out var updateGroup);
+                
                 var addGroupEntities = group.AddGroup.GetEntityArray();
                 for (var index = 0; index < addGroupEntities.Length; index++)
+                {
                     group.AddComponent(PostUpdateCommands, addGroupEntities[index]);
+                    if (isUpdateGroup)
+                        updateGroup.AddComponent(PostUpdateCommands, addGroupEntities[index]);
+                }
 
                 var removeGroupEntities = group.RemoveGroup.GetEntityArray();
                 for (var index = 0; index < removeGroupEntities.Length; index++)
                     group.RemoveComponent(PostUpdateCommands, removeGroupEntities[index]);
             }
+
+            foreach (var kvp in _reactiveUpdates)
+            {
+                var entities = kvp.Value.Group.GetEntityArray();
+                for (var index = 0; index < entities.Length; index++)
+                {
+                    PostUpdateCommands.RemoveComponent<ReactiveChanged>(entities[index]);
+                }
+            }
         }
 
         protected abstract void OnReactiveUpdate();
 
-        private interface IReactiveGroup
+        private interface IReactiveAddRemoveGroup
         {
             ComponentGroup AddGroup { get; }
             ComponentGroup RemoveGroup { get; }
@@ -145,11 +194,11 @@ namespace BovineLabs.Toolkit.ECS
             void RemoveComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
         }
 
-        private class ReactiveGroup<T> : IReactiveGroup where T : struct, ISystemStateComponentData
+        private class ReactiveAddRemoveGroup<T> : IReactiveAddRemoveGroup where T : struct, ISystemStateComponentData
         {
             private readonly T _stateComponent;
 
-            public ReactiveGroup(T stateComponent, ComponentGroup addGroup, ComponentGroup removeGroup)
+            public ReactiveAddRemoveGroup(T stateComponent, ComponentGroup addGroup, ComponentGroup removeGroup)
             {
                 _stateComponent = stateComponent;
                 AddGroup = addGroup;
@@ -170,13 +219,43 @@ namespace BovineLabs.Toolkit.ECS
             }
         }
 
-        private class KeyCompare : IEqualityComparer<Tuple<ComponentType[],ComponentType[]>>
+        private interface IReactiveUpdateGroup
+        {
+            ComponentGroup Group { get; }
+            void AddComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
+            void RemoveComponent(EntityCommandBuffer entityCommandBuffer, Entity entity);
+        }
+
+        private class ReactiveAddRemoveGroup<T, TC> : IReactiveUpdateGroup
+            where T : struct, IComponentData
+            where TC : struct, IReactiveCompare<T>, IComponentData
+        {
+            public ReactiveAddRemoveGroup(ComponentGroup group)
+            {
+                Group = group;
+            }
+
+            public ComponentGroup Group { get; }
+
+            public void AddComponent(EntityCommandBuffer entityCommandBuffer, Entity entity)
+            {
+                entityCommandBuffer.AddComponent(entity, new TC());
+            }
+
+            public void RemoveComponent(EntityCommandBuffer entityCommandBuffer, Entity entity)
+            {
+                entityCommandBuffer.RemoveComponent<TC>(entity);
+            }
+        }
+
+        private class KeyCompare : IEqualityComparer<Tuple<ComponentType[], ComponentType[]>>
         {
             private readonly ComponentComparer _componentComparer = new ComponentComparer();
-            
+
             public bool Equals(Tuple<ComponentType[], ComponentType[]> x, Tuple<ComponentType[], ComponentType[]> y)
             {
-                return x.Item1.SequenceEqual(y.Item1, _componentComparer) && x.Item2.SequenceEqual(y.Item2, _componentComparer);
+                return x.Item1.SequenceEqual(y.Item1, _componentComparer) &&
+                       x.Item2.SequenceEqual(y.Item2, _componentComparer);
             }
 
             public int GetHashCode(Tuple<ComponentType[], ComponentType[]> obj)
@@ -200,5 +279,62 @@ namespace BovineLabs.Toolkit.ECS
                 }
             }
         }
+    }
+
+    public struct ReactiveChanged : IComponentData
+    {
+        
+    }
+    
+    public class ReactiveCompareSystem<T, TC> : ComponentSystem 
+        where T : struct, IComponentData
+        where TC : struct, IReactiveCompare<T>, IComponentData
+    {
+        private ComponentGroup _group;
+
+        protected override void OnCreateManager(int capacity)
+        {
+            _group = GetComponentGroup(typeof(T), typeof(TC), ComponentType.Subtractive<ReactiveChanged>());
+        }
+
+        protected override void OnUpdate()
+        {
+            var t = _group.GetComponentDataArray<T>();
+            var tc = _group.GetComponentDataArray<TC>();
+            var entities = _group.GetEntityArray();
+
+            for (var index = 0; index < t.Length; index++)
+            {
+                if (!tc[index].Equals(t[index]))
+                {
+                    var previous = tc[index];
+                    previous.Set(t[index]);
+                    PostUpdateCommands.SetComponent(entities[index], previous);
+                    PostUpdateCommands.AddComponent(entities[index], new ReactiveChanged());
+                } 
+            }
+        }
+    }
+
+    public struct ReactiveCompare<T> : IComponentData, IReactiveCompare<T>
+        where T : struct, IComponentData
+    {
+        public T PreviousState;
+
+        public bool Equals(T t)
+        {
+            return t.Equals(PreviousState);
+        }
+
+        public void Set(T t)
+        {
+            PreviousState = t;
+        }
+    }
+
+    public interface IReactiveCompare<in T>
+    {
+        bool Equals(T t);
+        void Set(T t);
     }
 }
