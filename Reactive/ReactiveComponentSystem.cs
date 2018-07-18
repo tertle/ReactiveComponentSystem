@@ -131,12 +131,19 @@ namespace BovineLabs.Toolkit.Reactive
 
         private IReactiveUpdateGroup CreateReactiveUpdateGroup(ComponentType componentType)
         {
-            var group = GetComponentGroup(componentType, ComponentType.ReadOnly<ReactiveChanged>());
+           var reactiveCompareType = typeof(ReactiveCompare<>).MakeGenericType(componentType.GetManagedType());
+            var reactiveDirtyType = CreateReactiveUpdateTypeState(new []{componentType});
             
-            var reactiveCompareType = typeof(ReactiveCompare<>).MakeGenericType(componentType.GetManagedType());
-            
-            var reactiveCompareSystem = typeof(ReactiveCompareSystem<,>).MakeGenericType(componentType.GetManagedType(), reactiveCompareType);
+            var group = GetComponentGroup(componentType, ComponentType.ReadOnly(reactiveDirtyType));
+
+            var reactiveCompareSystem = typeof(ReactiveCompareSystem<,,>)
+                .MakeGenericType(componentType.GetManagedType(), reactiveCompareType, reactiveDirtyType);
             World.CreateManager(reactiveCompareSystem);
+            
+            var removeReactiveSystem = typeof(RemoveReactiveSystem<>)
+                .MakeGenericType(reactiveDirtyType);
+            World.CreateManager(removeReactiveSystem);
+            
             
             var makeme = typeof(ReactiveAddRemoveGroup<,>).MakeGenericType(componentType.GetManagedType(), reactiveCompareType);
             return (IReactiveUpdateGroup) Activator.CreateInstance(makeme, group);
@@ -148,6 +155,15 @@ namespace BovineLabs.Toolkit.Reactive
             var typeName = $"{GetType().Name}_{name}";
             var typeBuilder = ModuleBuilder.DefineType(typeName, TypeAttributes.Public, typeof(ValueType));
             typeBuilder.AddInterfaceImplementation(typeof(ISystemStateComponentData));
+            return typeBuilder.CreateType();
+        }
+        
+        private Type CreateReactiveUpdateTypeState(IEnumerable<ComponentType> componentTypes)
+        {
+            var name = string.Join("_", componentTypes);
+            var typeName = $"{GetType().Name}_{name}__Dirty";
+            var typeBuilder = ModuleBuilder.DefineType(typeName, TypeAttributes.Public, typeof(ValueType));
+            typeBuilder.AddInterfaceImplementation(typeof(IComponentData));
             return typeBuilder.CreateType();
         }
 
@@ -175,15 +191,6 @@ namespace BovineLabs.Toolkit.Reactive
                     group.RemoveComponent(PostUpdateCommands, removeGroupEntities[index]);
                     if (isUpdateGroup)
                         updateGroup.RemoveComponent(PostUpdateCommands, addGroupEntities[index]); // will these cause issues on deleted entities?
-                }
-            }
-
-            foreach (var kvp in _reactiveUpdates)
-            {
-                var entities = kvp.Value.Group.GetEntityArray();
-                for (var index = 0; index < entities.Length; index++)
-                {
-                    PostUpdateCommands.RemoveComponent<ReactiveChanged>(entities[index]);
                 }
             }
         }

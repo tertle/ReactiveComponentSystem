@@ -11,9 +11,10 @@ namespace BovineLabs.Toolkit.Reactive
         
     }
     
-    public class ReactiveCompareSystem<T, TC> : JobComponentSystem 
+    public class ReactiveCompareSystem<T, TC, TN> : JobComponentSystem 
         where T : struct, IComponentData
         where TC : struct, IReactiveCompare<T>, IComponentData
+        where TN : struct, IComponentData
     {
         [Inject] private ReactiveUpdateBarrier _barrier;
         
@@ -42,7 +43,7 @@ namespace BovineLabs.Toolkit.Reactive
                 var previous = Previous[index];
                 previous.Set(Components[index]);
                 CommandBuffer.SetComponent(Entities[index], previous);
-                CommandBuffer.AddComponent(Entities[index], new ReactiveChanged());
+                CommandBuffer.AddComponent(Entities[index], new TN());
             }
         }
 
@@ -59,6 +60,44 @@ namespace BovineLabs.Toolkit.Reactive
             };
             
             return compareJob.Schedule(_group.CalculateLength(), 64, inputDeps);
+        }
+    }
+
+    public class RemoveReactiveBarrier : BarrierSystem
+    {
+        
+    }
+    
+    public class RemoveReactiveSystem<T> : JobComponentSystem
+        where T : struct, IComponentData
+    {
+        [Inject] private RemoveReactiveBarrier _barrier;
+        private ComponentGroup _group;
+
+        private struct RemoveReactiveChangedJob : IJobParallelFor
+        {
+            [ReadOnly] public EntityArray Entities; 
+            public EntityCommandBuffer.Concurrent CommandBuffer;      
+            
+            public void Execute(int index)
+            {
+                CommandBuffer.RemoveComponent<T>(Entities[index]);
+            }
+        }
+        
+        protected override void OnCreateManager(int capacity)
+        {
+            _group = GetComponentGroup(ComponentType.ReadOnly<T>());
+        }
+
+        protected override JobHandle OnUpdate(JobHandle inputDeps)
+        {
+            var entities = _group.GetEntityArray();
+            return new RemoveReactiveChangedJob
+            {
+                CommandBuffer = _barrier.CreateCommandBuffer(),
+                Entities = entities
+            }.Schedule(entities.Length, 64, inputDeps);
         }
     }
 }
