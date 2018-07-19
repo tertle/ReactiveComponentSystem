@@ -6,7 +6,6 @@ using System.Reflection.Emit;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
-using UnityEngine;
 using UnityEngine.Assertions;
 
 namespace BovineLabs.Toolkit.Reactive
@@ -27,7 +26,6 @@ namespace BovineLabs.Toolkit.Reactive
         void CreateWorldSystemsIfRequired(World world);
     }
     
-    //[UpdateAfter(typeof(RemoveReactiveBarrier))]
     public class ReactiveBarrierSystem : BarrierSystem
     {
             

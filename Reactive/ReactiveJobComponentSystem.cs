@@ -8,6 +8,7 @@ using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
 using UnityEngine;
+using UnityEngine.Assertions;
 
 namespace BovineLabs.Toolkit.Reactive
 {
@@ -63,12 +64,28 @@ namespace BovineLabs.Toolkit.Reactive
 
             return groups;
         }
+        
+        private ReactiveBarrierSystem _barrier;
+
+        protected override void OnCreateManager(int capacity)
+        {
+            // We need to add our barrier manually as base class injection doesn't work
+            _barrier = World.GetOrCreateManager<ReactiveBarrierSystem>();
+            var barrierListField = typeof(JobComponentSystem)
+                .GetField("m_BarrierList", BindingFlags.NonPublic | BindingFlags.Instance);
+            var barriers = new List<BarrierSystem>((BarrierSystem[]) barrierListField.GetValue(this)) {_barrier};
+            barrierListField.SetValue(this, barriers.ToArray());
+        }
 
         protected sealed override JobHandle OnUpdate(JobHandle inputDeps)
         {
+            Assert.IsNotNull(_barrier,
+                "_reactiveBarrierSystem is null, make sure you call base.OnCreateManager(int capacity) wasn't called");
+            
             inputDeps = OnReactiveUpdate(inputDeps);
 
-            var barrierSystem = World.GetExistingManager<ReactiveBarrierSystem>();
+            //var barrierSystem = World.GetExistingManager<ReactiveBarrierSystem>();
+            
             foreach (var groups in _addRemoveGroups)
             {
                 var group = groups.Key;
@@ -76,20 +93,19 @@ namespace BovineLabs.Toolkit.Reactive
                 var addEntities = groups.Value.Key.GetEntityArray();
                 var removeEntities = groups.Value.Value.GetEntityArray();
                 
-                inputDeps = group.CreateAddJob(inputDeps, addEntities, barrierSystem.CreateCommandBuffer());
-                inputDeps = group.CreateRemoveJob(inputDeps, removeEntities, barrierSystem.CreateCommandBuffer());
+                inputDeps = group.CreateAddJob(inputDeps, addEntities, _barrier.CreateCommandBuffer());
+                inputDeps = group.CreateRemoveJob(inputDeps, removeEntities, _barrier.CreateCommandBuffer());
 
                 var isUpdateGroup = _groupMap.TryGetValue(group, out var updateGroup);
 
                 if (isUpdateGroup)
                 {
-                    inputDeps = updateGroup.CreateAddJob(inputDeps, addEntities, barrierSystem.CreateCommandBuffer());
-                    inputDeps = updateGroup.CreateRemoveJob(inputDeps, removeEntities,
-                        barrierSystem.CreateCommandBuffer());
+                    inputDeps = updateGroup.CreateAddJob(inputDeps, addEntities, _barrier.CreateCommandBuffer());
+                    inputDeps = updateGroup.CreateRemoveJob(inputDeps, removeEntities, _barrier.CreateCommandBuffer());
                 }
             }
             
-            inputDeps.Complete();
+            //inputDeps.Complete();
             
             return inputDeps;
         }
