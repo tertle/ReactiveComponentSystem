@@ -27,7 +27,7 @@ namespace BovineLabs.Toolkit.Reactive
         void CreateWorldSystemsIfRequired(World world);
     }
     
-    [UpdateBefore(typeof(RemoveReactiveBarrier))]
+    //[UpdateAfter(typeof(RemoveReactiveBarrier))]
     public class ReactiveBarrierSystem : BarrierSystem
     {
             
@@ -92,7 +92,6 @@ namespace BovineLabs.Toolkit.Reactive
             Assert.AreEqual(2, addRemoveGroup.AddComponents.Length);
 
             var componentType = addRemoveGroup.AddComponents[0];
-            
             Assert.AreNotEqual(ComponentType.AccessMode.Subtractive, componentType.AccessModeType);
             
             var componentTypes = new[] {componentType};
@@ -121,7 +120,7 @@ namespace BovineLabs.Toolkit.Reactive
             var addComponents = ComponentTypes.ToArray();
 
             ComponentTypes.Clear();
-
+            
             // Invert our component access for the remove group
             for (var index = 0; index < componentTypes.Count; index++)
             {
@@ -130,13 +129,13 @@ namespace BovineLabs.Toolkit.Reactive
                 c.AccessModeType = c.AccessModeType = ComponentType.AccessMode.Subtractive;
                 ComponentTypes.Add(c);
             }
-
+            
             ComponentTypes.Add(ComponentType.ReadOnly(reactiveComponentStateType));
 
-            var removeComponents = componentTypes.ToArray();
-
+            var removeComponents = ComponentTypes.ToArray();
+            
             ComponentTypes.Clear();
-
+            
             var reactiveComponentState = Activator.CreateInstance(reactiveComponentStateType);
             var makeme = typeof(ReactiveGroup<>).MakeGenericType(reactiveComponentStateType);
             return (IReactiveAddRemoveGroup) Activator.CreateInstance(makeme, reactiveComponentState, addComponents,
@@ -238,7 +237,7 @@ namespace BovineLabs.Toolkit.Reactive
             where TC : struct, IReactiveCompare<T>, IComponentData
             where TD : struct, IComponentData
         {
-            private HashSet<World> _worlds = new HashSet<World>();
+            private readonly HashSet<World> _worlds = new HashSet<World>();
 
             public ReactiveUpdateGroup(ComponentType[] components)
             {
@@ -299,6 +298,7 @@ namespace BovineLabs.Toolkit.Reactive
 
                 _worlds.Add(world);
 
+                
                 var reactiveCompareSystem =
                     typeof(ReactiveCompareSystem<,,>).MakeGenericType(typeof(T), typeof(TC), typeof(TD));
                 world.CreateManager(reactiveCompareSystem);

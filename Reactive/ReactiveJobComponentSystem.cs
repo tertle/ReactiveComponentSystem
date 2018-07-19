@@ -52,12 +52,12 @@ namespace BovineLabs.Toolkit.Reactive
         private KeyValuePair<ComponentGroup, ComponentGroup> GetGroups(ComponentType[] componentTypes, ComponentType[] conditionTypes)
         {
             var group = ReactiveTypeHelper.GetReactiveAddRemoveGroup(componentTypes, conditionTypes);
-            if (!_addRemoveGroups.TryGetValue(@group, out var groups))
+            if (!_addRemoveGroups.TryGetValue(group, out var groups))
             {
-                var addGroup = GetComponentGroup(@group.AddComponents);
-                var removeGroup = GetComponentGroup(@group.RemoveComponents);
+                var addGroup = GetComponentGroup(group.AddComponents);
+                var removeGroup = GetComponentGroup(group.RemoveComponents);
 
-                groups = _addRemoveGroups[@group] =
+            groups = _addRemoveGroups[group] =
                     new KeyValuePair<ComponentGroup, ComponentGroup>(addGroup, removeGroup);
             }
 
@@ -74,7 +74,7 @@ namespace BovineLabs.Toolkit.Reactive
                 var group = groups.Key;
 
                 var addEntities = groups.Value.Key.GetEntityArray();
-                var removeEntities = groups.Value.Key.GetEntityArray();
+                var removeEntities = groups.Value.Value.GetEntityArray();
                 
                 inputDeps = group.CreateAddJob(inputDeps, addEntities, barrierSystem.CreateCommandBuffer());
                 inputDeps = group.CreateRemoveJob(inputDeps, removeEntities, barrierSystem.CreateCommandBuffer());
@@ -89,7 +89,7 @@ namespace BovineLabs.Toolkit.Reactive
                 }
             }
             
-            //inputDeps.Complete();
+            inputDeps.Complete();
             
             return inputDeps;
         }

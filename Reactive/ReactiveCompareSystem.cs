@@ -1,28 +1,38 @@
-﻿using Unity.Burst;
-using Unity.Collections;
+﻿using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
-using UnityEngine;
+using UnityEngine.Experimental.PlayerLoop;
 
 namespace BovineLabs.Toolkit.Reactive
 {
+    [UpdateBefore(typeof(EarlyUpdate))]
     public class ReactiveUpdateBarrier : BarrierSystem
     {
-        
+
     }
-    
-    public class ReactiveCompareSystem<T, TC, TN> : JobComponentSystem 
+
+    [DisableAutoCreation]
+    [UpdateBefore(typeof(EarlyUpdate))]
+    public class ReactiveCompareSystem<T, TC, TN> : JobComponentSystem
         where T : struct, IComponentData
         where TC : struct, IReactiveCompare<T>, IComponentData
         where TN : struct, IComponentData
     {
         [Inject] private ReactiveUpdateBarrier _barrier;
-        
-        private ComponentGroup _group;
+        //[Inject] private RemoveReactiveBarrier _removeBarrier;
 
-        protected override void OnCreateManager(int capacity)
+        private ComponentGroup _group;
+        private ComponentGroup _remove;
+
+        private struct RemoveReactiveChangedJob : IJobParallelFor
         {
-            _group = GetComponentGroup(ComponentType.ReadOnly<T>(), ComponentType.ReadOnly<TC>());//, ComponentType.Subtractive<ReactiveChanged>());
+            [ReadOnly] public EntityArray Entities;
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+
+            public void Execute(int index)
+            {
+                CommandBuffer.RemoveComponent<T>(Entities[index]);
+            }
         }
 
         // [BurstCompile] Burst does not support EntityCommandBuffer yet
@@ -33,13 +43,13 @@ namespace BovineLabs.Toolkit.Reactive
             [ReadOnly] public EntityArray Entities;
             [ReadOnly] public ComponentDataArray<T> Components;
             [ReadOnly] public ComponentDataArray<TC> Previous;
-            
+
             public void Execute(int index)
             {
                 // Hasn't changed
                 if (Previous[index].Equals(Components[index]))
                     return;
-                
+
                 var previous = Previous[index];
                 previous.Set(Components[index]);
                 CommandBuffer.SetComponent(Entities[index], previous);
@@ -47,27 +57,36 @@ namespace BovineLabs.Toolkit.Reactive
             }
         }
 
+        protected override void OnCreateManager(int capacity)
+        {
+            _group = GetComponentGroup(ComponentType.ReadOnly<T>(), ComponentType.ReadOnly<TC>());
+            _remove = GetComponentGroup(ComponentType.ReadOnly<TN>());
+        }
+
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
-            //Debug.Log($"ReactiveCompareSystem {typeof(T)}");
-            
             var compareJob = new CompareJob
-            {
-                Entities = _group.GetEntityArray(),
-                Components = _group.GetComponentDataArray<T>(),
-                Previous = _group.GetComponentDataArray<TC>(),
-                CommandBuffer = _barrier.CreateCommandBuffer()
-            };
-            
-            return compareJob.Schedule(_group.CalculateLength(), 64, inputDeps);
+                {
+                    Entities = _group.GetEntityArray(),
+                    Components = _group.GetComponentDataArray<T>(),
+                    Previous = _group.GetComponentDataArray<TC>(),
+                    CommandBuffer = _barrier.CreateCommandBuffer()
+                }
+                .Schedule(_group.CalculateLength(), 64, inputDeps);
+
+            return compareJob;
         }
     }
 
+
+    [UpdateAfter(typeof(PostLateUpdate))]
     public class RemoveReactiveBarrier : BarrierSystem
     {
-        
+
     }
-    
+
+    //[UpdateAfter(typeof(Update))]
+    [UpdateAfter(typeof(PostLateUpdate))]
     public class RemoveReactiveSystem<T> : JobComponentSystem
         where T : struct, IComponentData
     {
@@ -76,15 +95,15 @@ namespace BovineLabs.Toolkit.Reactive
 
         private struct RemoveReactiveChangedJob : IJobParallelFor
         {
-            [ReadOnly] public EntityArray Entities; 
-            public EntityCommandBuffer.Concurrent CommandBuffer;      
-            
+            [ReadOnly] public EntityArray Entities;
+            public EntityCommandBuffer.Concurrent CommandBuffer;
+
             public void Execute(int index)
             {
                 CommandBuffer.RemoveComponent<T>(Entities[index]);
             }
         }
-        
+
         protected override void OnCreateManager(int capacity)
         {
             _group = GetComponentGroup(ComponentType.ReadOnly<T>());
@@ -93,6 +112,7 @@ namespace BovineLabs.Toolkit.Reactive
         protected override JobHandle OnUpdate(JobHandle inputDeps)
         {
             var entities = _group.GetEntityArray();
+
             return new RemoveReactiveChangedJob
             {
                 CommandBuffer = _barrier.CreateCommandBuffer(),

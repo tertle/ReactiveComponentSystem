@@ -140,11 +140,10 @@ namespace BovineLabs.Toolkit.Reactive
                 .MakeGenericType(componentType.GetManagedType(), reactiveCompareType, reactiveDirtyType);
             World.CreateManager(reactiveCompareSystem);
             
-            var removeReactiveSystem = typeof(RemoveReactiveSystem<>)
+            /*var removeReactiveSystem = typeof(RemoveReactiveSystem<>)
                 .MakeGenericType(reactiveDirtyType);
-            World.CreateManager(removeReactiveSystem);
-            
-            
+            World.CreateManager(removeReactiveSystem);*/
+                        
             var makeme = typeof(ReactiveAddRemoveGroup<,>).MakeGenericType(componentType.GetManagedType(), reactiveCompareType);
             return (IReactiveUpdateGroup) Activator.CreateInstance(makeme, group);
         }
