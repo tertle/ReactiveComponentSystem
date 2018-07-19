@@ -73,6 +73,9 @@ namespace BovineLabs.Toolkit.Reactive
             _barrier = World.GetOrCreateManager<ReactiveBarrierSystem>();
             var barrierListField = typeof(JobComponentSystem)
                 .GetField("m_BarrierList", BindingFlags.NonPublic | BindingFlags.Instance);
+            
+            Assert.IsNotNull(barrierListField, "Unity probably renamed m_BarrierList or changed how barriers added.");
+            
             var barriers = new List<BarrierSystem>((BarrierSystem[]) barrierListField.GetValue(this)) {_barrier};
             barrierListField.SetValue(this, barriers.ToArray());
         }
@@ -84,8 +87,6 @@ namespace BovineLabs.Toolkit.Reactive
             
             inputDeps = OnReactiveUpdate(inputDeps);
 
-            //var barrierSystem = World.GetExistingManager<ReactiveBarrierSystem>();
-            
             foreach (var groups in _addRemoveGroups)
             {
                 var group = groups.Key;
@@ -104,8 +105,6 @@ namespace BovineLabs.Toolkit.Reactive
                     inputDeps = updateGroup.CreateRemoveJob(inputDeps, removeEntities, _barrier.CreateCommandBuffer());
                 }
             }
-            
-            //inputDeps.Complete();
             
             return inputDeps;
         }
